@@ -210,29 +210,17 @@ def generate_answer_with_llm(question: str, articles: List[Dict[str, Any]]) -> s
     if client is None:
         return ""
 
-    # --- 条文コンテキストを短く整形（長すぎると機械っぽくなるため） ---
+    # --- 条文コンテキストを短く整形（AI の参考用） ---
     context_blocks: List[str] = []
 
     for i, art in enumerate(articles, start=1):
-        kind = art.get("kind") or ""          # 規約 / 駐車場使用細則 など
-        article_no = art.get("article") or "" # 条
-        clause_no = art.get("clause") or ""   # 項
-        title = art.get("title") or ""        # 見出し
-        body = art.get("body") or ""
+        # load_articles で入っている実際のキーを使う
+        label = art.get("label", "")        # 例：管理規約第◯条
+        heading = art.get("heading", "")    # 見出し
+        body = art.get("text", "")          # 条文本文
 
-        header_parts = []
-        if kind:
-            header_parts.append(kind)
-        if article_no:
-            header_parts.append(f"第{article_no}条")
-        if clause_no:
-            header_parts.append(f"第{clause_no}項")
-        if title:
-            header_parts.append(f"（{title}）")
+        header = f"{label} {heading}".strip() or f"候補 {i}"
 
-        header = " ".join(header_parts) or f"候補 {i}"
-
-        # 条文本文は長くなりすぎないように、先頭だけを抜粋
         body_str = (body or "").strip()
         if len(body_str) > 300:
             body_str = body_str[:300] + "……"
@@ -242,7 +230,7 @@ def generate_answer_with_llm(question: str, articles: List[Dict[str, Any]]) -> s
 
     context_text = "\n\n".join(context_blocks)
 
-    # --- ここが AI理事長の「人格」設定 ---
+    # --- AI理事長の人格設定 ---
     system_prompt = """
 あなたは「プレサンスロジェ岐阜長良橋通り管理組合法人」の
 AI理事長アシスタントです。
@@ -298,7 +286,7 @@ AI理事長アシスタントです。
 
     try:
         resp = client.chat.completions.create(
-            model="gpt-4.1-mini",  # ご利用のモデル名に合わせて調整してください
+            model="gpt-4.1-mini",  # ここはご契約に合わせて
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -306,38 +294,11 @@ AI理事長アシスタントです。
             temperature=0.4,
             max_tokens=700,
         )
-        return (resp.choices[0].message.content or "").strip()
+        # デバッグ用に LLM を使ったかどうか一目で分かる印を付ける
+        return "【LLM回答モード】\n" + (resp.choices[0].message.content or "").strip()
     except Exception as e:
-        # 失敗した場合は空文字を返し、呼び出し元でフォールバックさせる
         print(f"LLM error: {e}")
         return ""
-
-
-    context = build_context_block(articles)
-    system_prompt = build_system_prompt()
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": (
-                "住民から次のような質問がありました。\n"
-                f"質問：{question}\n\n"
-                "以下に、関連があると思われる管理規約・細則の条文を示します。\n"
-                "この情報だけを根拠として、住民向けにわかりやすく回答してください。\n\n"
-                f"{context}"
-            ),
-        },
-    ]
-
-    completion = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=messages,
-        temperature=0.2,
-    )
-
-    return completion.choices[0].message.content.strip()
-
 
 def build_fallback_answer(question: str, articles: List[Dict[str, Any]]) -> str:
     """
@@ -347,12 +308,16 @@ def build_fallback_answer(question: str, articles: List[Dict[str, Any]]) -> str:
     if not articles:
         return "該当しそうな規約・細則の条文を見つけられませんでした。理事会または管理会社へご相談ください。"
 
-    lines = ["関連がありそうな条文を抜粋します。詳細な解釈は理事会での検討が必要です。\n"]
+    lines = [
+        "【フォールバック規約抜粋モード】",
+        "関連がありそうな条文を抜粋します。詳細な解釈は理事会での検討が必要です。\n",
+    ]
     for art in articles[:3]:
         lines.append(f"■ {art['label']} {art.get('heading', '')}")
         lines.append(art.get("text", ""))
         lines.append("")
     return "\n".join(lines).strip()
+
 
 
 def answer_question_text(question: str) -> str:
@@ -362,7 +327,6 @@ def answer_question_text(question: str) -> str:
     """
     q = question.strip()
     if not q:
-        return "質問の内容が空でした。もう一度入力してください。"
         return "質問の内容が空でした。もう一度入力してください。"
 
     matched = search_articles(q, top_k=5)
