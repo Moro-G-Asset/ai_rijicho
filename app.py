@@ -204,10 +204,114 @@ def build_context_block(articles: List[Dict[str, Any]]) -> str:
 def generate_answer_with_llm(question: str, articles: List[Dict[str, Any]]) -> str:
     """
     OpenAI API を用いて、条文コンテキスト付きで回答を生成する。
-    APIキーやライブラリが無い場合は呼び出さず、空文字を返す。
+    住民向けに人間味のあるトーンで返答し、そのうえで関連する条文を
+    必要な範囲だけ抜粋して示す。
     """
     if client is None:
         return ""
+
+    # --- 条文コンテキストを短く整形（長すぎると機械っぽくなるため） ---
+    context_blocks: List[str] = []
+
+    for i, art in enumerate(articles, start=1):
+        kind = art.get("kind") or ""          # 規約 / 駐車場使用細則 など
+        article_no = art.get("article") or "" # 条
+        clause_no = art.get("clause") or ""   # 項
+        title = art.get("title") or ""        # 見出し
+        body = art.get("body") or ""
+
+        header_parts = []
+        if kind:
+            header_parts.append(kind)
+        if article_no:
+            header_parts.append(f"第{article_no}条")
+        if clause_no:
+            header_parts.append(f"第{clause_no}項")
+        if title:
+            header_parts.append(f"（{title}）")
+
+        header = " ".join(header_parts) or f"候補 {i}"
+
+        # 条文本文は長くなりすぎないように、先頭だけを抜粋
+        body_str = (body or "").strip()
+        if len(body_str) > 300:
+            body_str = body_str[:300] + "……"
+
+        block = f"■ {header}\n{body_str}"
+        context_blocks.append(block)
+
+    context_text = "\n\n".join(context_blocks)
+
+    # --- ここが AI理事長の「人格」設定 ---
+    system_prompt = """
+あなたは「プレサンスロジェ岐阜長良橋通り管理組合法人」の
+AI理事長アシスタントです。
+
+住民からの問い合わせに対して、次の方針で日本語の文章を作成してください。
+
+【役割】
+- まずは住民の不安や戸惑いに共感し、ねぎらいの一言を添える。
+- 現時点で分かる範囲で状況を整理し、「今後どのように対応するか」を
+  簡潔に説明する（管理人への共有、理事会での協議、業者手配の検討など）。
+- そのうえで、質問に関連しそうな管理規約・使用細則の条文を
+  【必要な部分だけ】抜粋して示す。
+- 条文は「参考情報」として添えるだけであり、机上の解釈を押しつけない。
+- 解釈が分かれる場合や判断が難しい場合は、
+  「最終的な判断は理事会で行います」と伝える。
+
+【文体・トーン】
+- です・ます調。事務的すぎず、感情的すぎない落ち着いた丁寧な文章。
+- 冒頭の3〜4文で
+    ①ねぎらい・共感
+    ②状況の共有
+    ③今後の対応予定
+  を簡潔に書く。
+- その後に「関連しそうな条文を抜粋します。」と一言添え、
+  箇条書き形式で条文を載せる。
+
+【条文の示し方】
+- 「■ ○○細則 第△条（□□）」のように見出しを付ける。
+- 長い条文は先頭の重要な部分だけを抜粋し、すべてを丸ごと貼らない。
+- 住民が読みやすいように、改行を適度に入れる。
+
+【禁止事項】
+- 条文全文の長大な貼り付けだけで回答を終えない。
+- 住民を非難するような表現を使わない。
+- 断定的に「あなたが悪い」「相手が悪い」と決めつけない。
+
+【出力形式】
+- 1つのテキストメッセージとして出力する。
+- 全体でおおむね 600 文字以内に収める。
+"""
+
+    user_prompt = f"""
+住民から次の問い合わせがありました。これに対する返信文を作成してください。
+
+【住民からのメッセージ】
+{question}
+
+【参考となる規約・細則の条文（検索結果の抜粋）】
+{context_text}
+
+上記の条文を参考にしつつ、住民に寄り添う形で回答してください。
+"""
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",  # ご利用のモデル名に合わせて調整してください
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.4,
+            max_tokens=700,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        # 失敗した場合は空文字を返し、呼び出し元でフォールバックさせる
+        print(f"LLM error: {e}")
+        return ""
+
 
     context = build_context_block(articles)
     system_prompt = build_system_prompt()
@@ -258,6 +362,7 @@ def answer_question_text(question: str) -> str:
     """
     q = question.strip()
     if not q:
+        return "質問の内容が空でした。もう一度入力してください。"
         return "質問の内容が空でした。もう一度入力してください。"
 
     matched = search_articles(q, top_k=5)
