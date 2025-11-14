@@ -153,7 +153,7 @@ def search_articles(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
 
         kw_bi = set(bigrams(kw_text))
         body_bi = set(bigrams(body))
-
+        
         inter_kw = q_bi & kw_bi
         inter_body = q_bi & body_bi
 
