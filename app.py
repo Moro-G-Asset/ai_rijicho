@@ -309,7 +309,7 @@ def generate_answer_with_llm(question: str, articles: List[Dict[str, Any]]) -> s
             model="gpt-4.1",  # ここはご契約に合わせて
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
+                {"role": "user", "content": user_prompt},
             ],
             temperature=0.4,
             max_tokens=700,
@@ -319,6 +319,7 @@ def generate_answer_with_llm(question: str, articles: List[Dict[str, Any]]) -> s
     except Exception as e:
         print(f"LLM error: {e}")
         return ""
+
 
 def build_fallback_answer(question: str, articles: List[Dict[str, Any]]) -> str:
     """
