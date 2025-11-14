@@ -209,15 +209,54 @@ def build_context_block(articles: List[Dict[str, Any]]) -> str:
 
 
 def generate_answer_with_llm(question: str, articles: List[Dict[str, Any]]) -> str:
+    """
+    OpenAI API を用いて、条文コンテキスト付きで回答を生成する。
+    住民向けに人間味のあるトーンで返答し、そのうえで関連する条文を
+    必要な範囲だけ抜粋して示す。
+    """
     if client is None:
-        # デバッグ用：クライアント未初期化の理由を表示
-        return "【LLMエラー】OpenAIクライアントが初期化されていません。OPENAI_API_KEY が正しく設定されているかご確認ください。"
+        # APIキー未設定などでクライアントがない場合は LLM を使わず終了
+        return ""
 
-    # ...（context_blocks を作る部分はそのまま）...
+    # --- 条文コンテキストを短く整形（AI の参考用） ---
+    context_blocks: List[str] = []
+
+    for i, art in enumerate(articles, start=1):
+        # load_articles で入っている実際のキーを使う
+        label = art.get("label", "")        # 例：管理規約第◯条
+        heading = art.get("heading", "")    # 見出し
+        body = art.get("text", "")          # 条文本文
+
+        header = f"{label} {heading}".strip() or f"候補 {i}"
+
+        body_str = (body or "").strip()
+        if len(body_str) > 300:
+            body_str = body_str[:300] + "……"
+
+        block = f"■ {header}\n{body_str}"
+        context_blocks.append(block)
+
+    context_text = "\n\n".join(context_blocks)
+
+    # --- AI管理人の人格設定（build_system_prompt を呼び出す） ---
+    system_prompt = build_system_prompt()
+
+    # --- ユーザーメッセージ ---
+    user_prompt = f"""
+住民から次の問い合わせがありました。これに対する返信文を作成してください。
+
+【住民からのメッセージ】
+{question}
+
+【参考となる規約・細則の条文（検索結果の抜粋）】
+{context_text}
+
+上記の条文を参考にしつつ、住民に寄り添う形で回答してください。
+"""
 
     try:
         resp = client.chat.completions.create(
-            model="gpt-4.1",  # mini → 4.1 に変更するならここ
+            model="gpt-4.1",  # ここを gpt-4.1 に統一
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -227,8 +266,10 @@ def generate_answer_with_llm(question: str, articles: List[Dict[str, Any]]) -> s
         )
         return "【LLM回答モード】\n" + (resp.choices[0].message.content or "").strip()
     except Exception as e:
-        # デバッグ中だけはエラー内容をそのまま返す
-        return f"【LLMエラー】{e}"
+        # 本番運用ではログだけ出して、呼び出し元でフォールバックに回す
+        print(f"LLM error: {e}")
+        return ""
+
 
 
 
