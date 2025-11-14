@@ -256,7 +256,7 @@ def generate_answer_with_llm(question: str, articles: List[Dict[str, Any]]) -> s
 
     try:
         resp = client.chat.completions.create(
-            model="gpt-4.1",  # ここを gpt-4.1 に統一
+            model="gpt-4o-mini",  # ここを gpt-4.1 に統一
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
