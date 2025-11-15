@@ -327,6 +327,19 @@ def get_tower_parking_section(now: datetime | None = None) -> str:
 
     return "\n".join(lines)
 
+def quick_answer_for_tower_parking() -> str:
+    """
+    タワーパーキングのドア開けっぱなし等、
+    「とにかく早く対応方法と連絡先だけ知りたい」ケース向けの簡潔な回答。
+    LLM を使わず、この関数の結果をそのまま返します。
+    """
+    header = (
+        "お世話になっております。「プレサンスロジェ岐阜長良橋通り管理組合法人」のAI管理人です。\n\n"
+        "タワーパーキングのドアが開いたままで、次の方の車が出庫できない場合の対応についてご案内いたします。\n\n"
+    )
+    # 時間帯に応じた連絡先案内は既存ロジックを使う
+    return header + get_tower_parking_section()
+
 
 def append_contact_sections(answer_text: str, original_question: str) -> str:
     """
@@ -377,6 +390,11 @@ def answer_question_text(question: str) -> str:
     if not q:
         return "質問の内容が空でした。もう一度入力してください。"
 
+    # ★ タワーパーキング関連は LLM を使わず、専用の短い回答だけ返す
+    tower_keywords = ["タワーパーキング", "立体駐車場", "タワー駐車場"]
+    if any(kw in q for kw in tower_keywords):
+        return quick_answer_for_tower_parking()
+
     matched = search_articles(q, top_k=5)
 
     if matched:
@@ -390,6 +408,7 @@ def answer_question_text(question: str) -> str:
     ans = append_contact_sections(ans, q)
 
     return ans
+
 
 
 
