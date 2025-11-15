@@ -350,12 +350,23 @@ def append_contact_sections(answer_text: str, original_question: str) -> str:
     """
     text_for_detection = (answer_text or "") + "\n" + (original_question or "")
 
-    # 1) 管理会社への連絡が必要そうな回答 → 回答文中に「管理会社」が出てきたら追記
-    if "管理会社" in answer_text:
-        answer_text += "\n\n" + get_management_company_section()
 
     # 2) タワーパーキング関連ワードの検知
-    tower_keywords = ["タワーパーキング", "立体駐車場", "タワー駐車場"]
+    tower_keywords = [
+        "タワーパーキング",
+        "立体駐車場",
+        "タワー駐車場",
+        "機械式駐車場",
+        "エレベーターパーキング",
+        "エレベータパーキング",
+        "開きっぱなし",
+        "開きっ放し",
+        "開けっぱなし",
+        "開けっ放し",
+        "多層式駐車場",
+        "パレット駐車場"
+    ]
+
     if any(kw in text_for_detection for kw in tower_keywords):
         answer_text += "\n\n" + get_tower_parking_section()
 
@@ -389,11 +400,41 @@ def answer_question_text(question: str) -> str:
     q = question.strip()
     if not q:
         return "質問の内容が空でした。もう一度入力してください。"
+    
+    # ★ 「管理会社」とだけ入力された場合は、連絡先だけを返す
+    if q == "管理会社":
+        return get_management_company_section()
+    # ★ 管理会社への連絡が必要になりそうな典型的キーワード群
+    mgmt_keywords = [
+        "水漏れ", "漏水", "雨漏り", "天井から水",
+        "停電", "断水", "電気がつかない", "電気が点かない",
+        "エレベーター", "エレベータ", "オートロック",
+        "共用部", "共用設備", "設備故障", "ポンプ故障", "給水ポンプ",
+    ]
+
+    # ★ 管理会社案件だと判断した場合は、番号は出さず案内だけ返す
+    if any(kw in q for kw in mgmt_keywords):
+        return (
+            "状況から判断すると、管理会社への連絡が必要となる可能性がございます。\n"
+            "管理会社の連絡先が必要な場合は「管理会社」と返信してください。"
+        )
+
+
 
     # ★ タワーパーキング関連は LLM を使わず、専用の短い回答だけ返す
-    tower_keywords = ["タワーパーキング", "立体駐車場", "タワー駐車場"]
+    tower_keywords = [
+        "タワーパーキング",
+        "立体駐車場",
+        "タワー駐車場",
+        "機械式駐車場",
+        "エレベーターパーキング",
+        "エレベータパーキング",
+        "多層式駐車場",
+        "パレット駐車場",
+    ]
     if any(kw in q for kw in tower_keywords):
         return quick_answer_for_tower_parking()
+
 
     matched = search_articles(q, top_k=5)
 
