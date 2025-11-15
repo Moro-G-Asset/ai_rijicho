@@ -274,6 +274,77 @@ def generate_answer_with_llm(question: str, articles: List[Dict[str, Any]]) -> s
 
 
 def build_fallback_answer(question: str, articles: List[Dict[str, Any]]) -> str:
+    ###############################################
+    # 連絡先表示ロジック（管理会社＋タワーパーキング）
+    ###############################################
+
+    def get_management_company_section() -> str:
+        """管理会社に連絡すべき案件の場合に表示される文面"""
+        return (
+            "【管理会社連絡先】\n"
+            "日本管財住宅管理株式会社\n"
+            "平日（9:00～18:00）：052-857-0051\n"
+            "上記以外および土日祝・年末年始（12/30～1/3）：0120-051-505"
+        )
+
+    def get_tower_parking_section(now: datetime | None = None) -> str:
+        """タワーパーキング案件のときに表示される文面"""
+        if now is None:
+            # Render の UTC から日本時間に変換（UTC+9）
+            now = datetime.utcnow() + timedelta(hours=9)
+
+        weekday = now.weekday()  # 月=0 〜 日=6
+        hour = now.hour
+
+        is_sunday = (weekday == 6)
+        is_wednesday = (weekday == 2)
+
+        # 管理員 在室条件：10〜17時 & 日曜/水曜以外
+        manager_available = (10 <= hour < 17) and not (is_sunday or is_wednesday)
+
+        lines: list[str] = []
+        lines.append("【タワーパーキングに関する連絡先】")
+
+        if manager_available:
+            lines.append(
+                "・現在は管理員在室時間帯（10:00～17:00・日/水を除く）です。まず管理員室へお声がけください。"
+            )
+        else:
+            lines.append(
+                "・現在は管理員不在時間帯です。以下のサービスセンターへご連絡ください。"
+            )
+
+        lines.append("　ＩＨＩ運搬機械（株）岐阜サービスセンター")
+        lines.append("　電話番号：058-268-3380")
+        lines.append("")
+        lines.append(
+            "※タワーパーキングのドアが開いたままで次の方の車が出庫できない等の場合、"
+            "管理組合のLINE公式アカウントよりご連絡ください。"
+            "マスターキーの保管場所をご案内できる場合があります。"
+        )
+
+        return "\n".join(lines)
+
+    def append_contact_sections(answer_text: str, original_question: str) -> str:
+        """
+        LLMやフォールバックで組み立てた回答に対して、
+        ・回答文の中に「管理会社」が出てきたら → 管理会社の電話番号を追記
+        ・質問 or 回答の中にタワーパーキング関連ワードがあれば → タワーパーキング連絡先を追記
+        という形で末尾に連絡先案内を自動付与します。
+        """
+        text_for_detection = (answer_text or "") + "\n" + (original_question or "")
+
+        # 1) 管理会社への連絡が必要そうな回答 → 回答文中に「管理会社」が出てきたら追記
+        if "管理会社" in answer_text:
+            answer_text += "\n\n" + get_management_company_section()
+
+        # 2) タワーパーキング関連ワードの検知
+        tower_keywords = ["タワーパーキング", "立体駐車場", "タワー駐車場"]
+        if any(kw in text_for_detection for kw in tower_keywords):
+            answer_text += "\n\n" + get_tower_parking_section()
+
+        return answer_text
+
     """
     OpenAI が使えない場合の簡易回答。
     条文を列挙するだけ。
@@ -294,24 +365,28 @@ def build_fallback_answer(question: str, articles: List[Dict[str, Any]]) -> str:
 
 
 def answer_question_text(question: str) -> str:
-    """
-    生テキストの質問に対して、回答文だけ返すユーティリティ。
-    （/ask API と LINE Webhook の両方から利用）
-    """
-    q = question.strip()
-    if not q:
-        return "質問の内容が空でした。もう一度入力してください。"
+    def answer_question_text(question: str) -> str:
+        """
+        生テキストの質問に対して、回答文だけ返すユーティリティ。
+        （/ask API と LINE Webhook の両方から利用）
+        """
+        q = question.strip()
+        if not q:
+            return "質問の内容が空でした。もう一度入力してください。"
 
-    matched = search_articles(q, top_k=5)
+        matched = search_articles(q, top_k=5)
 
-    if matched:
-        ans = generate_answer_with_llm(q, matched)
-        if not ans:
-            ans = build_fallback_answer(q, matched)
-    else:
-        ans = "該当しそうな規約・細則の条文を見つけられませんでした。理事会または管理会社へご相談ください。"
+        if matched:
+            ans = generate_answer_with_llm(q, matched)
+            if not ans:
+                ans = build_fallback_answer(q, matched)
+        else:
+            ans = "該当しそうな規約・細則の条文を見つけられませんでした。理事会または管理会社へご相談ください。"
 
-    return ans
+        # ★ 管理会社／タワーパーキングの連絡先を自動で追記
+        ans = append_contact_sections(ans, q)
+
+        return ans
 
 
 # ========= FastAPI 定義 =========
