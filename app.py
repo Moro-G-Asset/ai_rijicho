@@ -47,6 +47,33 @@ if not LINE_CHANNEL_SECRET or not LINE_CHANNEL_ACCESS_TOKEN:
 line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 line_parser = WebhookParser(LINE_CHANNEL_SECRET)
 
+line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
+line_parser = WebhookParser(LINE_CHANNEL_SECRET)
+
+# ========= AI管理人 セッション管理（「管理人」から30分間有効） =========
+
+# key: ユーザー or グループなどのトークID
+# value: そのトークで AI管理人が有効な期限（UTC 時刻）
+AI_SESSION_EXPIRY: Dict[str, datetime] = {}
+SESSION_DURATION_MINUTES = 30  # 「管理人」と送られてから有効な時間（分）
+
+
+def get_source_id_for_session(event: MessageEvent) -> str | None:
+    """
+    セッションをユーザー／グループ単位で管理するためのIDを取得する。
+    v3 Webhook の source は userId / groupId / roomId を持つので、
+    それらを順に参照する。
+    """
+    src = event.source
+
+    # v3 の属性名に揺れがあっても拾えるように両方見る
+    for attr in ("user_id", "userId", "group_id", "groupId", "room_id", "roomId"):
+        value = getattr(src, attr, None)
+        if value:
+            return value
+
+    return None
+
 
 # ========= データ読み込み & 前処理 =========
 
@@ -550,14 +577,53 @@ async def line_webhook(request: Request):
 
         for event in events:
             if isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
-                user_text = event.message.text or ""
-                reply_text = answer_question_text(user_text)
 
+                # ユーザーからのメッセージ
+                user_text = (event.message.text or "").strip()
+
+                # このトーク（ユーザー／グループなど）を識別するID
+                source_id = get_source_id_for_session(event)
+
+                # 念のため、IDが取れない場合は従来どおり常に回答
+                if source_id is None:
+                    reply_text = answer_question_text(user_text)
+                else:
+                    now = datetime.utcnow()
+
+                    # ① 「管理人」と送られた場合 → ここから30分間 AI自動応答モードにする
+                    if user_text == "管理人":
+                        AI_SESSION_EXPIRY[source_id] = now + timedelta(
+                            minutes=SESSION_DURATION_MINUTES
+                        )
+                        reply_text = (
+                            "AI管理人を起動しました。\n"
+                            f"これから{SESSION_DURATION_MINUTES}分間、このトークでのご質問にはAI管理人が自動でお答えします。\n"
+                            "ご用件を続けてお送りください。"
+                        )
+
+                    else:
+                        # ② 「管理人」以外のメッセージ
+                        expiry = AI_SESSION_EXPIRY.get(source_id)
+
+                        # セッションがない or 期限切れ → AI管理人は黙る
+                        if not expiry or now > expiry:
+                            # 期限切れの場合は辞書から削除（お好みで）
+                            if expiry and now > expiry:
+                                AI_SESSION_EXPIRY.pop(source_id, None)
+                            # ★ ここでは何も返信しない：
+                            #    本番では LINE 側の一律応答だけが返る想定。
+                            continue
+
+                        # ③ セッション有効中 → 通常の回答ロジックを使う
+                        reply_text = answer_question_text(user_text)
+
+                # ここまで来た場合のみ LINE に返信する
                 reply_request = ReplyMessageRequest(
                     reply_token=event.reply_token,
                     messages=[TextMessage(text=reply_text)],
                 )
                 messaging_api.reply_message(reply_request)
+
 
     return "OK"
 
