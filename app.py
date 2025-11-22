@@ -575,6 +575,9 @@ async def line_webhook(request: Request):
     with ApiClient(line_config) as api_client:
         messaging_api = MessagingApi(api_client)
 
+    with ApiClient(line_config) as api_client:
+        messaging_api = MessagingApi(api_client)
+
         for event in events:
             if isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
 
@@ -582,40 +585,36 @@ async def line_webhook(request: Request):
                 user_text = (event.message.text or "").strip()
 
                 # このトーク（ユーザー／グループなど）を識別するID
-                source_id = get_source_id_for_session(event)
+                # 取れなかった場合は "__global__" にまとめる（全体セッション）
+                source_id = get_source_id_for_session(event) or "__global__"
 
-                # 念のため、IDが取れない場合は従来どおり常に回答
-                if source_id is None:
-                    reply_text = answer_question_text(user_text)
+                now = datetime.utcnow()
+
+                # ① 「管理人」と送られた場合 → ここから30分間 AI自動応答モードにする
+                if user_text == "管理人":
+                    AI_SESSION_EXPIRY[source_id] = now + timedelta(
+                        minutes=SESSION_DURATION_MINUTES
+                    )
+                    reply_text = (
+                        "AI管理人を起動しました。\n"
+                        f"これから{SESSION_DURATION_MINUTES}分間、このトークでのご質問にはAI管理人が自動でお答えします。\n"
+                        "ご用件を続けてお送りください。"
+                    )
+
                 else:
-                    now = datetime.utcnow()
+                    # ② 「管理人」以外のメッセージ
+                    expiry = AI_SESSION_EXPIRY.get(source_id)
 
-                    # ① 「管理人」と送られた場合 → ここから30分間 AI自動応答モードにする
-                    if user_text == "管理人":
-                        AI_SESSION_EXPIRY[source_id] = now + timedelta(
-                            minutes=SESSION_DURATION_MINUTES
-                        )
-                        reply_text = (
-                            "AI管理人を起動しました。\n"
-                            f"これから{SESSION_DURATION_MINUTES}分間、このトークでのご質問にはAI管理人が自動でお答えします。\n"
-                            "ご用件を続けてお送りください。"
-                        )
+                    # セッションがない or 期限切れ → AI管理人は黙る
+                    if not expiry or now > expiry:
+                        if expiry and now > expiry:
+                            AI_SESSION_EXPIRY.pop(source_id, None)
+                        # ここでは何も返信しない：
+                        # （テスト環境ではただ沈黙、本番ではLINE側の一律応答だけが返る想定）
+                        continue
 
-                    else:
-                        # ② 「管理人」以外のメッセージ
-                        expiry = AI_SESSION_EXPIRY.get(source_id)
-
-                        # セッションがない or 期限切れ → AI管理人は黙る
-                        if not expiry or now > expiry:
-                            # 期限切れの場合は辞書から削除（お好みで）
-                            if expiry and now > expiry:
-                                AI_SESSION_EXPIRY.pop(source_id, None)
-                            # ★ ここでは何も返信しない：
-                            #    本番では LINE 側の一律応答だけが返る想定。
-                            continue
-
-                        # ③ セッション有効中 → 通常の回答ロジックを使う
-                        reply_text = answer_question_text(user_text)
+                    # ③ セッション有効中 → 通常の回答ロジックを使う
+                    reply_text = answer_question_text(user_text)
 
                 # ここまで来た場合のみ LINE に返信する
                 reply_request = ReplyMessageRequest(
@@ -623,6 +622,7 @@ async def line_webhook(request: Request):
                     messages=[TextMessage(text=reply_text)],
                 )
                 messaging_api.reply_message(reply_request)
+
 
 
     return "OK"
